@@ -1,27 +1,76 @@
 name: CI
 
 on:
-  pull:
+  push:
     branches: [main]
-
-
-
+permissions:
+  contents: read
+  packages: write
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-latest # we define the runer
     steps:
-      - name: Recupérer le code
+      - name: Recuperer le code
         uses: actions/checkout@v4
 
-      - name: Install Node.js
-        uses: actions/setup-node@v3
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
-      - name: Installer les dépendances  
-        run: npm ci
+      - name: Installer les dépendances
+        run: npm install
 
       - name: Vérifier le code
         run: npm run lint
-        
+
+      - name: Lancer les tests
+        run: npm test
+
+      - name: construire l'image docker
+        run: docker build -t cicd-demo-s2 .
+
+      - name: Demarer le conteneur docker
+        run: docker run -d -p 3000:3000 --name cicd-demo cicd-demo-s2
+
+      - name: Attendre l´application
+        run: |
+          for i in {1..10}; do
+            if curl --fail http://localhost:3000/api/health; then 
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Vérifie le calcule TTC
+        run: |
+          curl --fail "http://localhost:3000/api/calcul/ttc?prix=100&tva=20" | grep "120"
+
+      - name: Netoyer le conteneur
+        if: always()
+        run: docker rm -f cicd-demo || true
+
+      - name: Preparer le nom l'image
+        run: |
+          REPO="${{ github.repository  }}"
+          IMAGE_NAME="ghcr.io/${REPO}"
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Connextion a GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tagger l'image validée
+        run: |
+          docker tag cicd-demo-s2 "$IMAGE_NAME:${GITHUB_SHA}" 
+          docker tag cicd-demo-s2 "$IMAGE_NAME:latest"
+          docker image ls "$IMAGE_NAME"
+
+      - name: Publier dans GHCR
+        run: |
+          docker push "$IMAGE_NAME:${GITHUB_SHA}"
+          docker push "$IMAGE_NAME:latest"
